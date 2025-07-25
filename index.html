@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Chicago Clerk – Hyper-Search Portal</title>
+
+  <!-- Basic meta for responsive layout -->
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+
+  <!-- ===========================
+       COLOR & TYPOGRAPHY TOKENS
+       (Light & Dark via CSS variables)
+  ============================ -->
+  <style>
+    /* ---------- RESET & GLOBAL ---------- */
+    *{margin:0;padding:0;box-sizing:border-box;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+    body{background:var(--bg);color:var(--fg);transition:background .25s,color .25s}
+    a{color:var(--accent);text-decoration:none}
+    button,input{border:none;outline:none;font-size:1rem}
+    button{cursor:pointer;background:var(--accent);color:#fff;padding:.6rem 1.2rem;border-radius:4px}
+    button:hover{filter:brightness(1.1)}
+    input[type=search]{width:100%;padding:.6rem 1rem;border:1px solid var(--border);border-radius:4px;background:var(--input-bg);color:var(--fg)}
+
+    /* ---------- CSS VARIABLES ---------- */
+    :root{
+      --bg:#fafafa;
+      --fg:#111;
+      --border:#ccc;
+      --input-bg:#fff;
+      --accent:#0b4a9e;
+      --card:#fff;
+      --shadow:0 2px 8px rgba(0,0,0,.08);
+    }
+
+    /* Dark mode overrides */
+    @media (prefers-color-scheme:dark){
+      :root{
+        --bg:#121212;
+        --fg:#e4e4e4;
+        --border:#333;
+        --input-bg:#1e1e1e;
+        --accent:#0a7cff;
+        --card:#1e1e1e;
+        --shadow:0 2px 8px rgba(0,0,0,.4);
+      }
+    }
+
+    /* ---------- LAYOUT ---------- */
+    header{padding:2rem 1rem;text-align:center}
+    main{max-width:1000px;margin:0 auto;padding:0 1rem 3rem}
+    .search-box{display:flex;gap:.5rem;margin-bottom:2rem}
+    .results{display:grid;gap:1rem}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:1.2rem;box-shadow:var(--shadow)}
+    .meta{font-size:.85rem;color:var(--border)}
+    .detail{margin-top:1rem}
+    .no-results{text-align:center;color:var(--border);margin-top:2rem}
+    .error{color:#b60000;background:#ffeaea;padding:1rem;border-radius:4px}
+
+    /* Responsive tweaks */
+    @media(max-width:600px){
+      header h1{font-size:1.5rem}
+    }
+  </style>
+</head>
+
+<body>
+  <!-- ===========================
+       HEADER
+  ============================ -->
+  <header>
+    <h1>City of Chicago Clerk – Hyper-Search Portal</h1>
+    <p>A clean, responsive interface to explore city records.</p>
+  </header>
+
+  <!-- ===========================
+       MAIN CONTENT
+  ============================ -->
+  <main>
+    <!-- Search box -->
+    <form id="searchForm" class="search-box">
+      <input id="searchInput" type="search" placeholder="Search records (e.g., ordinance, zoning)…" required>
+      <button type="submit">Search</button>
+    </form>
+
+    <!-- Results container -->
+    <div id="results" class="results"></div>
+
+    <!-- Drill-down container -->
+    <div id="detailPane" class="detail"></div>
+  </main>
+
+  <!-- ===========================
+       JAVASCRIPT
+       (No external dependencies)
+  ============================ -->
+  <script>
+    /* ---------- CONFIG ---------- */
+    const API_BASE = 'https://api.chicagoapi.org/chicago-opendata.json';
+
+    /* ---------- STATE ---------- */
+    let currentQuery = '';
+
+    /* ---------- UTILITY ---------- */
+    // Simple CSV helper
+    const toCsv = (rows) => {
+      const escape = (str) => `"${String(str || '').replace(/"/g, '""')}"`;
+      return rows.map(r => r.map(escape).join(',')).join('\n');
+    };
+
+    // Download file helper
+    const downloadBlob = (blob, filename) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+    /* ---------- API WRAPPERS ---------- */
+    // Generic fetch wrapper with error handling
+    async function apiGet(path) {
+      const res = await fetch(API_BASE + path);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.json();
+    }
+
+    // Main search
+    async function searchRecords(query) {
+      return apiGet(`/search?q=${encodeURIComponent(query)}`);
+    }
+
+    // Retrieve detail by type
+    async function getDetail(type, id) {
+      // type = matter|meeting|person|body
+      return apiGet(`/${type}/${encodeURIComponent(id)}`);
+    }
+
+    /* ---------- DOM HANDLES ---------- */
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => [...document.querySelectorAll(sel)];
+
+    /* ---------- RENDER FUNCTIONS ---------- */
+    // Render a list of search results
+    function renderResults(data) {
+      const container = $('#results');
+      container.innerHTML = '';
+
+      if (!data || !data.length) {
+        container.innerHTML = '<p class="no-results">No results found.</p>';
+        return;
+      }
+
+      data.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+          <h3>${item.title || 'Untitled'}</h3>
+          <p class="meta">Type: ${item.type || 'N/A'}</p>
+          <p>${item.description || ''}</p>
+          <button class="drill" data-type="${item.type}" data-id="${item.id}">Details</button>
+        `;
+        container.appendChild(card);
+      });
+
+      // Wire up drill-down buttons
+      $$('.drill').forEach(btn => {
+        btn.addEventListener('click', drillDown);
+      });
+    }
+
+    // Drill-down handler
+    async function drillDown(e) {
+      const { type, id } = e.target.dataset;
+      const detailPane = $('#detailPane');
+      detailPane.innerHTML = '<p>Loading…</p>';
+
+      try {
+        const detail = await getDetail(type, id);
+        renderDetail(type, detail);
+      } catch (err) {
+        detailPane.innerHTML = `<p class="error">Error loading details: ${err.message}</p>`;
+      }
+    }
+
+    // Render a detailed view
+    function renderDetail(type, data) {
+      const pane = $('#detailPane');
+      pane.innerHTML = '';
+
+      // Build a table
+      const rows = Object.entries(data).map(([k, v]) => [k, v]);
+      const csv = toCsv([['Key', 'Value'], ...rows]);
+
+      // Create content
+      const card = document.createElement('div');
+      card.className = 'card';
+
+      card.innerHTML = `
+        <h2>Details (${type})</h2>
+        <table style="width:100%;border-collapse:collapse;margin-top:.5rem">
+          <thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:.3rem 0">Field</th><th style="text-align:left;padding:.3rem 0">Value</th></tr></thead>
+          <tbody>
+            ${rows.map(([k, v]) => `
+              <tr>
+                <td style="padding:.3rem 0">${k}</td>
+                <td style="padding:.3rem 0">${typeof v === 'object' ? JSON.stringify(v) : v}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <button id="csvBtn" style="margin-top:1rem">Download CSV</button>
+      `;
+
+      pane.appendChild(card);
+
+      // CSV export
+      $('#csvBtn').addEventListener('click', () => {
+        const blob = new Blob([csv], { type: 'text/csv' });
+        downloadBlob(blob, `${type}-${data.id || 'export'}.csv`);
+      });
+    }
+
+    /* ---------- EVENT LISTENERS ---------- */
+    // Search form submission
+    $('#searchForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const query = $('#searchInput').value.trim();
+      if (!query) return;
+      currentQuery = query;
+
+      $('#results').innerHTML = '<p style="text-align:center">Searching…</p>';
+      $('#detailPane').innerHTML = '';
+
+      try {
+        const results = await searchRecords(query);
+        renderResults(results);
+      } catch (err) {
+        $('#results').innerHTML = `<p class="error">Search failed: ${err.message}</p>`;
+      }
+    });
+  </script>
+</body>
+</html>
