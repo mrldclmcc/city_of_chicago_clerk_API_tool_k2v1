@@ -95,7 +95,8 @@
   ============================ -->
   <script>
     /* ---------- CONFIG ---------- */
-    const API_BASE = 'https://api.chicagoapi.org/chicago-opendata.json';
+    const API_BASE = 'https://corsproxy.io/?' +
+                 encodeURIComponent('https://api.chicagoapi.org/chicago-opendata.json');
 
     /* ---------- STATE ---------- */
     let currentQuery = '';
